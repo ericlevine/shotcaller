@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Shotcaller</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="styles.css">
+<script src="client-log.js"></script>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <div class="brand">Shotcaller<small>Voice-commanded 4v4 arena</small></div>
+    <div class="score" aria-label="Kills">
+      <span class="r" id="killsR">0</span><span class="clock" id="clock">0:00</span><span class="d" id="killsD">0</span>
+    </div>
+    <div class="towers" id="towerCount">Towers 6 – 6</div>
+    <div class="spacer"></div>
+    <button class="tbtn" id="pauseBtn" aria-pressed="false">Pause</button>
+    <button class="tbtn" id="speedBtn">1×</button>
+    <button class="tbtn" id="settingsBtn" aria-expanded="false">Settings</button>
+  </header>
+
+  <section class="stage" id="stage">
+    <canvas id="view" aria-label="Battlefield"></canvas>
+    <canvas class="minimap" id="minimap" width="168" height="168" aria-label="Minimap"></canvas>
+    <div class="feed" id="feed"></div>
+    <div class="hint">Hold <kbd>Space</kbd> to talk · <kbd>1</kbd>–<kbd>4</kbd> select · scroll or drag to pan · <kbd>+</kbd>/<kbd>−</kbd> or pinch to zoom</div>
+    <div class="status" id="status" hidden aria-live="polite"></div>
+    <div class="notice" id="notice" hidden><p id="noticeText"></p><button id="noticeClose" aria-label="Dismiss">×</button></div>
+    <div class="cmd" id="cmdForm">
+      <button type="button" class="mic" id="micBtn" aria-label="Hold to talk">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
+      <div class="cmdbox">
+        <input id="cmdInput" autocomplete="off" enterkeyhint="send" placeholder="Give an order — “Brakka and Lyra, gank Nyx”" aria-label="Order">
+        <div class="interim" id="interim">Hold Space or the mic to speak. Enter sends a typed order.</div>
+      </div>
+    </div>
+    <div class="overlay" id="overlay" hidden>
+      <div class="card"><h2 id="ovTitle">Victory</h2><p id="ovText"></p><button class="primary" id="againBtn">Play again</button></div>
+    </div>
+  </section>
+
+  <aside class="rail">
+    <div class="settings" id="settings" hidden>
+      <p class="prov" id="provLine"><span class="dot"></span>Connecting to the server…</p>
+      <label><input type="checkbox" id="optFast" checked> Instant path for simple orders (skips the models)</label>
+      <label><input type="checkbox" id="optBatch" checked> One agent call when 3+ heroes get orders</label>
+      <label><input type="checkbox" id="optVoice" checked> Heroes answer out loud</label>
+      <label><input type="checkbox" id="optOpen"> Open mic (no need to hold Space)</label>
+      <label class="col"><span>Enemy team</span><select id="optDiff"><option value="easy">Easy</option><option value="normal" selected>Normal</option><option value="hard">Hard</option></select></label>
+      <p class="prov" id="logLine"><span class="dot"></span>Order log: off</p>
+      <p class="small">Agents run through the local server, which calls the Claude API with the key in its .env file. Instant-path orders never call the model.</p>
+    </div>
+
+    <section class="sect">
+      <h3>Squad <span id="selHint">Click a hero or press 1–4</span></h3>
+      <div class="squad" id="squad"></div>
+    </section>
+
+    <section class="sect">
+      <h3>Try saying</h3>
+      <div class="examples" id="examples"></div>
+    </section>
+
+    <section class="sect">
+      <h3>Command trace <span id="provShort"></span></h3>
+      <div class="trace" id="trace"><p class="empty">Each order shows here: who it was routed to, what each hero decided, and how long every step took.</p></div>
+    </section>
+  </aside>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
