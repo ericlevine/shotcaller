@@ -95,7 +95,7 @@ const XP_NEED = [200,500,900,1400,2000,2700,3500,4400,5400,6500,7700];
    Game state
    ========================================================= */
 let S, uid = 0;
-const settings = {fast:true, batch:true, voice:true, open:false, diff:'normal'};
+const settings = {fast:true, batch:true, voice:true, open:false, diff:'normal', stt:'server'};
 try { Object.assign(settings, JSON.parse(localStorage.getItem('shotcaller.settings') || '{}')); } catch {}
 const saveSettings = () => { try { localStorage.setItem('shotcaller.settings', JSON.stringify(settings)); } catch {} };
 
@@ -1027,16 +1027,23 @@ function speak(h, text) {
 /* =========================================================
    Models: Claude in the viewer, the Anthropic API locally
    ========================================================= */
-const AI = {mode:'detecting', model:'', ok:0};
+const AI = {mode:'detecting', model:'', ok:0, stt:null};
 async function initAI() {
   try {
     const r = await fetch('/api/health');
     const j = await r.json();
     AI.model = j.model || '';
     AI.mode = j.llm ? 'api' : 'local';
+    AI.stt = j.stt || null;
     LOG.on = true;
   } catch { AI.mode = 'local'; }
-  renderProvider(); renderLogStatus();
+  renderProvider(); renderLogStatus(); renderSttLine();
+}
+function renderSttLine() {
+  const sel = $('optStt'), line = $('sttLine');
+  sel.querySelector('option[value="server"]').disabled = !AI.stt || STT.failed;
+  sel.value = sttEngine();
+  line.textContent = AI.stt && !STT.failed ? `Server mode uses OpenAI ${AI.stt}; the key stays on the server.` : STT.failed ? 'OpenAI speech failed this session, so the browser recognizer is in use.' : 'Set OPENAI_API_KEY in the server’s .env and restart it to use OpenAI speech recognition.';
 }
 function renderProvider() {
   const line = $('provLine');
@@ -1435,7 +1442,7 @@ function snapshotHero(h) {
 function logStart(text, source, sttMs) {
   const sc = screenContext();
   return {session:LOG.session, n:cmdCount, at:new Date().toISOString(), gameTime:fmtTime(S.t), gameT:Math.round(S.t * 10) / 10,
-    text, source, sttMs:sttMs || null, aiMode:AI.mode, model:AI.model, settings:{fast:settings.fast, batch:settings.batch, diff:settings.diff},
+    text, source, sttMs:sttMs || null, stt:source === 'voice' ? (MIC.engine === 'server' ? AI.stt : 'browser') : null, aiMode:AI.mode, model:AI.model, settings:{fast:settings.fast, batch:settings.batch, diff:settings.diff},
     screen:{centre:sc.centre, lane:sc.lane, alliesOnScreen:sc.visA, enemiesOnScreen:sc.visE, selected:sc.selected, cam:[Math.round(cam.x), Math.round(cam.y), +cam.z.toFixed(2)]},
     score:S.kills.slice(), before:Object.fromEntries(allies().map(h => [h.key, snapshotHero(h)])),
     enemies:Object.fromEntries(enemiesH().map(h => [h.key, {alive:h.alive, hp:Math.round(h.hp / h.maxHp * 100), where:h.alive ? describePos(h) : 'dead'}])),
@@ -1511,21 +1518,52 @@ function traceAdd(text, source, sttMs) {
 /* =========================================================
    Voice in (speech-to-text)
    ========================================================= */
+// Two engines: OpenAI realtime transcription through the server's /api/stt socket (when the server has an
+// OpenAI key), or the browser's built-in recognizer as the fallback. STT.on / STT.want mean the same for both.
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const STT = {rec:null, on:false, want:false, releasedAt:0};
+const STT = {rec:null, on:false, want:false, releasedAt:0, failed:false};
 const noticeShown = {};
 function showNotice(text, key) {
   if (key) { if (noticeShown[key]) return; noticeShown[key] = true; }
   $('noticeText').textContent = text; $('notice').hidden = false;
 }
 $('noticeClose').addEventListener('click', () => { $('notice').hidden = true; });
+const sttEngine = () => (AI.stt && settings.stt !== 'browser' && !STT.failed) ? 'server' : 'browser';
+const IDLE_HINT = 'Hold Space or the mic to speak. Enter sends a typed order.';
+const micShowLive = on => { STT.on = on; $('micBtn').classList.toggle('live', on); };
 function micStart() {
   if (STT.on) return;
+  STT.releasedAt = 0;
+  if (sttEngine() === 'server') return serverMicStart();
+  browserMicStart();
+}
+function micStop() {
+  STT.releasedAt = performance.now();
+  if (settings.open) return;
+  STT.want = false;
+  if (MIC.engine === 'server') return serverMicStop();
+  if (STT.rec && STT.on) try { STT.rec.stop(); } catch {}
+}
+// turn the mic off entirely (open-mic toggle, settings change)
+function micHalt() {
+  STT.want = false;
+  if (MIC.engine === 'server') { if (MIC.sending) { MIC.sending = false; sttSend({type:'clear'}); } micShowLive(false); setInterim(IDLE_HINT, false); }
+  else if (STT.rec && STT.on) try { STT.rec.stop(); } catch {}
+}
+function setInterim(t, live) { const el = $('interim'); el.textContent = t; el.classList.toggle('live', !!live); }
+function micBlocked() {
+  STT.want = false; micShowLive(false);
+  showNotice('The microphone is blocked here. Inside Claude, pages can’t use the mic, so type orders below. For voice, open the downloaded copy of this page in Chrome.', 'mic');
+}
+
+/* ---- browser engine ---- */
+function browserMicStart() {
+  MIC.engine = 'browser';
   if (!SR) { showNotice('This browser has no built-in speech recognition. Use Chrome, Edge or Safari for voice, or type orders below.', 'nosr'); $('cmdInput').focus(); return; }
   STT.want = true;
   const rec = new SR(); STT.rec = rec;
   rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = settings.open; rec.maxAlternatives = 1;
-  rec.onstart = () => { STT.on = true; $('micBtn').classList.add('live'); setInterim('Listening…', true); };
+  rec.onstart = () => { micShowLive(true); setInterim('Listening…', true); };
   rec.onresult = e => {
     let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -1536,31 +1574,143 @@ function micStart() {
     if (interim) setInterim(interim, true);
   };
   rec.onerror = e => {
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') {
-      STT.want = false;
-      showNotice('The microphone is blocked here. Inside Claude, pages can’t use the mic, so type orders below. For voice, open the downloaded copy of this page in Chrome.', 'mic');
-    } else if (e.error !== 'no-speech' && e.error !== 'aborted') setInterim(`Speech error: ${e.error}`, false);
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') micBlocked();
+    else if (e.error !== 'no-speech' && e.error !== 'aborted') setInterim(`Speech error: ${e.error}`, false);
   };
   rec.onend = () => {
-    STT.on = false; $('micBtn').classList.remove('live');
-    if (STT.want && settings.open) { try { micStart(); } catch {} } else if ($('interim').classList.contains('live')) setInterim('Hold Space or the mic to speak. Enter sends a typed order.', false);
+    micShowLive(false);
+    if (STT.want && settings.open) { try { browserMicStart(); } catch {} } else if ($('interim').classList.contains('live')) setInterim(IDLE_HINT, false);
   };
-  STT.releasedAt = 0;
   try { rec.start(); } catch (e) { setInterim('Could not start the microphone.', false); }
 }
-function micStop() {
-  STT.releasedAt = performance.now();
-  if (settings.open) return;
-  STT.want = false;
-  if (STT.rec && STT.on) try { STT.rec.stop(); } catch {}
+
+/* ---- server engine: mic -> AudioWorklet (24 kHz PCM16) -> /api/stt -> OpenAI ---- */
+const MIC = {engine:null, ctx:null, ready:null, sending:false, preroll:[], voiced:0, quiet:0, turnMs:0, floor:0.006};
+const NET = {ws:null, queue:[], seq:0, turns:{}, items:new Map(), idle:0};
+const PREROLL_CHUNKS = 8;      // 8 x 40 ms: catches the first syllable said as Space goes down
+const VAD_END_MS = 650;        // open mic: this much quiet ends an order
+const MAX_TURN_MS = 15000;
+function sttPrompt() {
+  const names = t => ROSTER.filter(r => r.team === t).map(r => r.name).join(', ');
+  return `Short spoken orders to heroes in a 4v4 arena game. Our heroes: ${names(0)}. Enemy heroes: ${names(1)}. Lanes: top, mid, bot.`;
 }
-function setInterim(t, live) { const el = $('interim'); el.textContent = t; el.classList.toggle('live', !!live); }
+function sttKeywords() {
+  const words = [...ROSTER.map(r => r.name), 'top', 'mid', 'bot', 'gank', 'push', 'defend', 'retreat', 'regroup', 'farm', 'ult', 'tower', 'jungle',
+    ...Object.values(ITEMS).map(i => i.label)];
+  return [...new Set(words)];
+}
+function sttSend(m) {
+  const ws = NET.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(m instanceof ArrayBuffer ? m : JSON.stringify(m));
+  else if (ws && ws.readyState === WebSocket.CONNECTING) NET.queue.push(m);
+}
+function sttConnect() {
+  if (NET.ws && NET.ws.readyState <= WebSocket.OPEN) return;
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/stt`);
+  ws.binaryType = 'arraybuffer';
+  NET.ws = ws; NET.queue = [];
+  ws.onopen = () => {
+    ws.send(JSON.stringify({type:'config', keywords:sttKeywords(), prompt:sttPrompt()}));
+    for (const m of NET.queue.splice(0)) ws.send(m instanceof ArrayBuffer ? m : JSON.stringify(m));
+  };
+  ws.onmessage = e => {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    if (m.type === 'delta') {
+      const t = (NET.items.get(m.item) || '') + m.text; NET.items.set(m.item, t);
+      setInterim(t.trim() || 'Listening…', true);
+    } else if (m.type === 'final') sttFinal(m);
+    else if (m.type === 'error') sttError(m);
+  };
+  ws.onclose = () => {
+    if (NET.ws === ws) NET.ws = null;
+    // anything still waiting for text is lost; say so instead of hanging on "Listening…"
+    if (Object.keys(NET.turns).length) { NET.turns = {}; setInterim('Speech connection dropped. Try the order again.', false); }
+    NET.items.clear();
+  };
+}
+function sttFinal(m) {
+  if (m.item) NET.items.delete(m.item);
+  const turn = NET.turns[m.id]; delete NET.turns[m.id];
+  const text = (m.text || '').trim();
+  const ms = turn ? Math.round(performance.now() - turn.releasedAt) : 0;
+  if (m.error) setInterim(`Speech error: ${m.error}`, false);
+  else if (text) { setInterim(`“${text}”`, STT.on); runCommand(text, 'voice', ms); }
+  else if (turn && !settings.open) setInterim('Didn’t catch that. Hold Space while you speak.', false);
+}
+function sttError(m) {
+  // a missing or rejected key will not fix itself: switch to the browser engine for this session
+  if (['no_api_key', 'auth_failed', 'http_401', 'http_403', 'http_404'].includes(m.code)) {
+    STT.failed = true; micHalt();
+    showNotice(`OpenAI speech recognition isn’t available (${m.message}). Using the browser’s speech recognition instead.`, 'sttfail');
+    renderSttLine();
+  } else setInterim(`Speech error: ${m.message}`, false);
+}
+function micEnsure() {
+  MIC.ready ??= (async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true}});
+    const ctx = new AudioContext();
+    await ctx.audioWorklet.addModule('mic-worklet.js');
+    const node = new AudioWorkletNode(ctx, 'mic-tap');
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    ctx.createMediaStreamSource(stream).connect(node); node.connect(mute).connect(ctx.destination);
+    node.port.onmessage = e => micChunk(e.data);
+    MIC.ctx = ctx;
+  })();
+  MIC.ready.catch(() => { MIC.ready = null; });
+  return MIC.ready;
+}
+function turnBegin() {
+  sttConnect();
+  // a silent socket is closed after a few minutes and reopened by the next order
+  clearTimeout(NET.idle); NET.idle = setTimeout(() => { if (!MIC.sending && NET.ws) NET.ws.close(); }, 180000);
+  MIC.sending = true; MIC.quiet = 0; MIC.turnMs = 0;
+  for (const c of MIC.preroll.splice(0)) sttSend(c);
+}
+function turnEnd() {
+  if (!MIC.sending) return;
+  MIC.sending = false;
+  const id = 't' + (++NET.seq);
+  NET.turns[id] = {releasedAt: STT.releasedAt || performance.now()};
+  sttSend({type:'commit', id});
+}
+function micChunk({pcm, rms}) {
+  const open = settings.open && STT.want;
+  if (open && !MIC.sending) {
+    // energy detector with a slowly tracked noise floor; two loud chunks in a row start an order
+    if (rms > Math.max(0.015, MIC.floor * 3)) MIC.voiced++; else { MIC.voiced = 0; MIC.floor = MIC.floor * 0.98 + rms * 0.02; }
+    if (MIC.voiced >= 2) { MIC.preroll.push(pcm); STT.releasedAt = 0; turnBegin(); setInterim('Listening…', true); return; }
+  }
+  if (!MIC.sending) { MIC.preroll.push(pcm); if (MIC.preroll.length > PREROLL_CHUNKS) MIC.preroll.shift(); return; }
+  sttSend(pcm);
+  MIC.turnMs += 40;
+  if (open) {
+    MIC.quiet = rms < Math.max(0.01, MIC.floor * 2) ? MIC.quiet + 40 : 0;
+    if (MIC.quiet >= VAD_END_MS || MIC.turnMs >= MAX_TURN_MS) { STT.releasedAt = performance.now(); turnEnd(); MIC.voiced = 0; }
+  } else if (MIC.turnMs >= MAX_TURN_MS) { STT.releasedAt = performance.now(); turnEnd(); }
+}
+function serverMicStart() {
+  MIC.engine = 'server';
+  STT.want = true; micShowLive(true);
+  sttConnect();
+  if (!settings.open) turnBegin();
+  setInterim(settings.open ? 'Open mic: just speak.' : 'Listening…', true);
+  micEnsure().then(() => MIC.ctx.state === 'suspended' && MIC.ctx.resume()).catch(e => {
+    if (e && (e.name === 'NotAllowedError' || e.name === 'NotFoundError' || e.name === 'SecurityError')) micBlocked();
+    else setInterim('Could not start the microphone.', false);
+    MIC.sending = false;
+  });
+}
+function serverMicStop() {
+  micShowLive(false);
+  turnEnd();
+  setInterim('…', true);
+}
 
 /* =========================================================
    Input
    ========================================================= */
 const mic = $('micBtn');
-mic.addEventListener('pointerdown', e => { e.preventDefault(); if (settings.open) { if (STT.on || STT.want) { STT.want = false; STT.rec && STT.rec.stop(); } else micStart(); } else micStart(); });
+mic.addEventListener('pointerdown', e => { e.preventDefault(); if (settings.open) { if (STT.on || STT.want) micHalt(); else micStart(); } else micStart(); });
 mic.addEventListener('pointerup', () => { if (!settings.open) micStop(); });
 mic.addEventListener('pointerleave', () => { if (!settings.open && STT.on) micStop(); });
 // the viewer's sandbox never fires form submit, so Enter is handled on the input itself
@@ -1647,7 +1797,8 @@ $('settingsBtn').addEventListener('click', () => { const s = $('settings'); s.hi
 $('againBtn').addEventListener('click', () => { const sp = S.speed; newGame(); S.speed = sp; $('overlay').hidden = true; buildSquad(); renderSquad(); });
 const bindCheck = (id, key, fn) => { const el = $(id); el.checked = settings[key]; el.addEventListener('change', () => { settings[key] = el.checked; saveSettings(); fn && fn(); }); };
 bindCheck('optFast', 'fast'); bindCheck('optBatch', 'batch'); bindCheck('optVoice', 'voice', () => { if (!settings.voice) try { speechSynthesis.cancel(); } catch {} });
-bindCheck('optOpen', 'open', () => { if (!settings.open) { STT.want = false; STT.rec && STT.on && STT.rec.stop(); } });
+bindCheck('optOpen', 'open', () => { if (!settings.open) micHalt(); });
+$('optStt').addEventListener('change', e => { micHalt(); settings.stt = e.target.value; saveSettings(); renderSttLine(); });
 $('optDiff').value = settings.diff;
 $('optDiff').addEventListener('change', e => { settings.diff = e.target.value; saveSettings(); for (const h of enemiesH()) { h.statMult = ({easy:.85, normal:1, hard:1.12})[settings.diff]; recompute(h); } });
 
@@ -1684,5 +1835,5 @@ renderSquad();
 renderProvider();
 initAI();
 requestAnimationFrame(frame);
-window.__shotcaller = {get S() { return S; }, AI, LOG, step, fastParse, routerPrompt, agentPrompt, batchPrompt, runCommand, applyDirective, cam};
+window.__shotcaller = {get S() { return S; }, AI, LOG, step, fastParse, routerPrompt, agentPrompt, batchPrompt, runCommand, applyDirective, cam, STT, MIC, NET};
 })();

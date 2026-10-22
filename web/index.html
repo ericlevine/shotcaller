@@ -53,6 +53,8 @@
       <label><input type="checkbox" id="optBatch" checked> One agent call when 3+ heroes get orders</label>
       <label><input type="checkbox" id="optVoice" checked> Heroes answer out loud</label>
       <label><input type="checkbox" id="optOpen"> Open mic (no need to hold Space)</label>
+      <label class="col"><span>Speech recognition</span><select id="optStt"><option value="server">OpenAI (through the server)</option><option value="browser">Browser built-in</option></select></label>
+      <p class="small" id="sttLine"></p>
       <label class="col"><span>Enemy team</span><select id="optDiff"><option value="easy">Easy</option><option value="normal" selected>Normal</option><option value="hard">Hard</option></select></label>
       <p class="prov" id="logLine"><span class="dot"></span>Order log: off</p>
       <p class="small">Agents run through the local server, which calls the Claude API with the key in its .env file. Instant-path orders never call the model.</p>

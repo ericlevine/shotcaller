@@ -18,4 +18,8 @@ export const config = {
   logLevel: env.LOG_LEVEL || 'info',
   logDir: path.resolve(root, env.LOG_DIR || 'logs'),
   logPrompts: bool(env.LOG_PROMPTS),
+  openaiKey: env.OPENAI_API_KEY || '',
+  sttModel: env.OPENAI_STT_MODEL || 'gpt-live-transcribe',
+  sttDelay: env.OPENAI_STT_DELAY || 'low',
+  sttUrl: env.OPENAI_REALTIME_URL || 'wss://api.openai.com/v1/realtime?intent=transcription',
 };

@@ -44,7 +44,7 @@ export function createApp({ llm = completeJSON, log = logger } = {}) {
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (req, res) => {
-    res.json({ ok: true, llm: Boolean(config.apiKey), model: config.model });
+    res.json({ ok: true, llm: Boolean(config.apiKey), model: config.model, stt: config.openaiKey ? config.sttModel : null });
   });
 
   app.post('/api/llm', async (req, res) => {
